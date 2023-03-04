@@ -52,7 +52,6 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#include <LittleFS.h>
 #include <WebDav4WebServer.h>
 
 #if !WEBSERVER_HAS_HOOK
@@ -66,11 +65,34 @@
 #define STAPSK "psk"
 #endif
 
-#define DAVROOT "/"         // this is the WebDAV root-URL directory, / is allowed
+////////////////////////////////////////////////////
+// select one of the three available filesystems
+// with "#if 1" (and "#if 0" for the others)
 
-//FS& gfs = SPIFFS;
+// SDFS might need https://github.com/esp8266/Arduino/pull/8844
+// which is available in
+// - current git version,
+// - unofficial snapshot 0.0.1 version (https://d-a-v.github.io/esp8266/Arduino/index.html)
+// - esp8266/Arduino release 3.1.2 (yet to be released)
+
+#if 1
+#include <LittleFS.h>
 FS& gfs = LittleFS;
-//FS& gfs = SDFS;
+#endif
+
+#if 0
+#include <SDFS.h>
+FS& gfs = SDFS;
+#endif
+
+#if 0
+FS& gfs = SPIFFS;
+#endif
+
+//
+////////////////////////////////////////////////////
+
+#define DAVROOT "/"         // this is the WebDAV root-URL directory, / is allowed
 
 ESP8266WebServer server(80);
 
