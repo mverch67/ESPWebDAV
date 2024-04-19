@@ -463,7 +463,9 @@ void ESPWebDAVCore::handleRequest()
         DBG_PRINT("Depth: %d", depth);
     }
     File file;
-    if (gfs->exists(uri) || (uri == "/"))
+    if (uri != "/" && !gfs->exists(uri) && (method.equals("GET") || method.equals("HEAD")))
+        uri += ".gz";
+    if (uri == "/" || gfs->exists(uri))
     {
         // does uri refer to a file or directory or a null?
         file = gfs->open(uri, "r");
@@ -878,7 +880,7 @@ void ESPWebDAVCore::handleGet(ResourceType resource, File& file, bool isGet)
 
     size_t fileSize = file.size();
     String contentType = contentTypeFn(uri);
-    if (uri.endsWith(".gz") && contentType != "application/x-gzip" && contentType != "application/octet-stream")
+    if (uri.endsWith(".gz")) //&& contentType != "application/x-gzip" && contentType != "application/octet-stream")
         sendHeader("Content-Encoding", "gzip");
 
     String internal = emptyString;
@@ -972,7 +974,7 @@ void ESPWebDAVCore::handleGet(ResourceType resource, File& file, bool isGet)
                 }
 #endif // !STREAMSEND_API
 
-#if DBG_WEBDAV
+#if 0 && DBG_WEBDAV
                 for (size_t i = 0; i < 80 && i < numRead; i++)
                     DBG_PRINTSHORT("%c", buf[i] < 32 || buf[i] > 127 ? '.' : buf[i]);
 #endif
