@@ -45,7 +45,12 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <WiFi.h>
 #include "PolledTimeout_esp32.h"
+#if __has_include(<rom/miniz.h>)
+#include <rom/miniz.h>
+#else
 #include <miniz.h>
+#endif
+
 const char * FileName(const char * path)
 {
     String name = path;
