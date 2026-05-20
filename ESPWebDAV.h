@@ -68,11 +68,6 @@
 #define DBG_PRINTSHORT(...)    { }
 #endif
 
-// constants for WebServer
-#define CONTENT_LENGTH_UNKNOWN ((size_t) -1)
-#define CONTENT_LENGTH_NOT_SET ((size_t) -2)
-#define HTTP_MAX_POST_WAIT 		5000
-
 #if WEBDAV_LOCK_SUPPORT > 1
 #include <map>
 #endif

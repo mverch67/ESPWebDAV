@@ -45,7 +45,7 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <WiFi.h>
 #include "PolledTimeout_esp32.h"
-#include <rom/miniz.h>
+#include <miniz.h>
 const char * FileName(const char * path)
 {
     String name = path;
@@ -77,6 +77,7 @@ const char * FileName(const char * path)
 
 #include <time.h>
 #include <ESPWebDAV.h>
+#include "WebServer.h"
 
 #define ALLOW "PROPPATCH,PROPFIND,OPTIONS,DELETE" SCUNLOCK ",COPY" SCLOCK ",MOVE,HEAD,POST,PUT,GET"
 
@@ -544,7 +545,12 @@ void ESPWebDAVCore::handleRequest()
 
     // delete a file or directory
     if (method.equals("DELETE"))
+    {
+        // On ESP32 LittleFS, unlink fails when the target file handle is still open.
+        if (file)
+            file.close();
         return handleDelete(resource);
+    }
 
     // delete a file or directory
     if (method.equals("COPY"))

@@ -1,13 +1,22 @@
 {
-    "name": "ESPWebDAV",
+    "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",    "name": "ESPWebDAV",
     "version": "2.1.5",
     "keywords": "esp8266, WebDAV",
     "description": "WebDav server compatible with linux, macOS, windows",
     "authors": [
         { "name": "ardyesp" },
         { "name": "d-a-v" },
+        { "name": "mverch67" }
     ],
-    "repository": { "type": "git", "url": "https://github.com/d-a-v/ESPWebDAV" },
+    "repository": { "type": "git", "url": "https://github.com/mverch67/ESPWebDAV" },
     "frameworks": "arduino",
-    "platforms": "espressif8266"
+    "platforms": "espressif32, espressif8266",
+    "dependencies": {
+        "WiFi": "*"
+    },
+    "build": {
+        "libArchive": true,
+        "includeDir": "include",
+        "srcDir": "."
+    }
 }
