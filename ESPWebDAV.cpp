@@ -985,6 +985,13 @@ void ESPWebDAVCore::handleGet(ResourceType resource, File& file, bool isGet)
                 size_t numRead = file.read((uint8_t*)buf, toRead);
                 DBG_PRINT("read %d bytes from file", (int)numRead);
 
+                if (numRead == 0)
+                {
+                    DBG_PRINT("file read returned 0 with %d bytes remaining", remaining);
+                    client->stop();
+                    break; // abort transfer instead of spinning forever
+                }
+
                 if (client->write(buf, numRead) != numRead)
                 {
                     DBG_PRINT("file->net short transfer");
