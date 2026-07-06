@@ -828,6 +828,13 @@ void ESPWebDAVCore::sendContentProp(const String& what, const String& response)
 
 void ESPWebDAVCore::sendPropResponse(bool isDir, const String& fullResPathFS, size_t size, time_t lastWrite, time_t creationDate)
 {
+    String displayName = fullResPathFS;
+    if (displayName.length() > 1 && displayName[displayName.length() - 1] == '/')
+        displayName.remove(displayName.length() - 1);
+    int slash = displayName.lastIndexOf('/');
+    if (slash >= 0 && slash + 1 < (int)displayName.length())
+        displayName = displayName.substring(slash + 1);
+
     String fullResPath = fullResPathFS;
     replaceFront(fullResPath, _fsRoot, _davRoot);
     fullResPath = c2enc(fullResPath);
@@ -863,7 +870,7 @@ void ESPWebDAVCore::sendPropResponse(bool isDir, const String& fullResPathFS, si
         sendContentProp(F("getetag"), entityTag);
     }
 
-    sendContentProp(F("displayname"), fullResPath);
+    sendContentProp(F("displayname"), displayName);
 
     sendContent(F("</D:prop></D:propstat></D:response>"));
 }
@@ -1043,18 +1050,24 @@ void ESPWebDAVCore::handlePut(ResourceType resource)
     // did server send any data in put
     DBG_PRINT("%s - ready for data (%i bytes)", uri.c_str(), (int)contentLengthHeader);
 
-    if (contentLengthHeader != 0)
+    if (contentLengthHeader != 0 || transferChunkedHeader)
     {
 #if DBG_WEBDAV
         long tStart = millis();
 #endif
         size_t numRemaining = contentLengthHeader;
+        size_t totalWritten = 0;
 
         if (transferStatusFn)
             transferStatusFn(file.name(), 0, true);
         int percent = 0;
 
 #if STREAMSEND_API
+
+        if (transferChunkedHeader)
+        {
+            return handleWriteError("Chunked PUT is not supported in STREAMSEND_API mode", file);
+        }
 
         while (numRemaining > 0)
         {
@@ -1069,6 +1082,7 @@ void ESPWebDAVCore::handlePut(ResourceType resource)
                 return handleWriteError(error, file);
             }
             numRemaining -= sent;
+            totalWritten += sent;
 
             if (transferStatusFn)
             {
@@ -1089,36 +1103,106 @@ void ESPWebDAVCore::handlePut(ResourceType resource)
         BUF_ALLOC(bufSize, return handleWriteError("Memory full", file));
 
         // read data from stream and write to the file
-        while (numRemaining > 0)
+        if (transferChunkedHeader)
         {
-            size_t numToRead = numRemaining;
-            if (numToRead > bufSize)
-                numToRead = bufSize;
-            auto numRead = readBytesWithTimeout((uint8_t*)buf, numToRead);
-            if (numRead == 0)
-                break;
-
-            size_t written = 0;
-            while (written < numRead)
+            while (true)
             {
-                auto numWrite = file.write((uint8_t*)buf + written, numRead - written);
-                if (numWrite == 0 || (int)numWrite == -1)
+                String chunkHeader = client->readStringUntil('\r');
+                client->readStringUntil('\n');
+                int extSep = chunkHeader.indexOf(';');
+                if (extSep >= 0)
+                    chunkHeader.remove(extSep);
+                chunkHeader.trim();
+
+                size_t chunkSize = strtoul(chunkHeader.c_str(), nullptr, 16);
+                if (chunkSize == 0)
                 {
-                    DBG_PRINT("error: numread=%d write=%d written=%d", (int)numRead, (int)numWrite, (int)written);
-                    BUF_FREE();
-                    return handleWriteError("Write data failed", file);
+                    // Consume optional trailing headers terminated by a blank line.
+                    while (true)
+                    {
+                        String trailer = client->readStringUntil('\r');
+                        client->readStringUntil('\n');
+                        if (trailer == "")
+                            break;
+                    }
+                    break;
                 }
-                written += numWrite;
+
+                size_t chunkRemaining = chunkSize;
+                while (chunkRemaining > 0)
+                {
+                    size_t numToRead = chunkRemaining;
+                    if (numToRead > bufSize)
+                        numToRead = bufSize;
+                    auto numRead = readBytesWithTimeout((uint8_t *)buf, numToRead);
+                    if (numRead == 0)
+                    {
+                        BUF_FREE();
+                        return handleWriteError("Timed out waiting for chunk data", file);
+                    }
+
+                    size_t written = 0;
+                    while (written < numRead)
+                    {
+                        auto numWrite = file.write((uint8_t *)buf + written, numRead - written);
+                        if (numWrite == 0 || (int)numWrite == -1)
+                        {
+                            DBG_PRINT("error: numread=%d write=%d written=%d", (int)numRead, (int)numWrite, (int)written);
+                            BUF_FREE();
+                            return handleWriteError("Write data failed", file);
+                        }
+                        written += numWrite;
+                    }
+
+                    chunkRemaining -= numRead;
+                    totalWritten += numRead;
+                }
+
+                uint8_t crlf[2];
+                if (readBytesWithTimeout(crlf, 2) != 2 || crlf[0] != '\r' || crlf[1] != '\n')
+                {
+                    BUF_FREE();
+                    return handleWriteError("Bad chunk terminator", file);
+                }
             }
 
-            // reduce the number outstanding
-            numRemaining -= numRead;
             if (transferStatusFn)
+                transferStatusFn(file.name(), 100, true);
+        }
+        else
+        {
+            while (numRemaining > 0)
             {
-                int p = (100 * (contentLengthHeader - numRemaining)) / contentLengthHeader;
-                if (p != percent)
+                size_t numToRead = numRemaining;
+                if (numToRead > bufSize)
+                    numToRead = bufSize;
+                auto numRead = readBytesWithTimeout((uint8_t *)buf, numToRead);
+                if (numRead == 0)
+                    break;
+
+                size_t written = 0;
+                while (written < numRead)
                 {
-                    transferStatusFn(file.name(), percent = p, true);
+                    auto numWrite = file.write((uint8_t *)buf + written, numRead - written);
+                    if (numWrite == 0 || (int)numWrite == -1)
+                    {
+                        DBG_PRINT("error: numread=%d write=%d written=%d", (int)numRead, (int)numWrite, (int)written);
+                        BUF_FREE();
+                        return handleWriteError("Write data failed", file);
+                    }
+                    written += numWrite;
+                }
+
+                // reduce the number outstanding
+                numRemaining -= numRead;
+                totalWritten += numRead;
+                if (transferStatusFn)
+                {
+                    int p = (100 * (contentLengthHeader - numRemaining)) / contentLengthHeader;
+                    if (p != percent)
+                    {
+                        transferStatusFn(file.name(), percent = p, true);
+                    }
                 }
             }
         }
@@ -1126,12 +1210,13 @@ void ESPWebDAVCore::handlePut(ResourceType resource)
         BUF_FREE();
 
         // detect timeout condition
-        if (numRemaining)
+        if (!transferChunkedHeader && numRemaining)
             return handleWriteError("Timed out waiting for data", file);
 
 #endif // !STREAMSEND_API
 
-        DBG_PRINT("File %zu bytes stored in: %ld sec", (contentLengthHeader - numRemaining), ((millis() - tStart) / 1000));
+        size_t storedBytes = transferChunkedHeader ? totalWritten : (contentLengthHeader - numRemaining);
+        DBG_PRINT("File %zu bytes stored in: %ld sec", storedBytes, ((millis() - tStart) / 1000));
     }
 
     DBG_PRINT("file written ('%s': %d = %d bytes)", String(file.name()).c_str(), (int)contentLengthHeader, (int)file.size());
@@ -1300,6 +1385,8 @@ void ESPWebDAVCore::handleDelete(ResourceType resource)
 {
     DBG_PRINT("Processing DELETE '%s'", uri.c_str());
 
+    const String targetUri = uri;
+
     // does URI refer to anything
     if (resource == RESOURCE_NONE)
         return handleIssue(404, "Not found");
@@ -1310,23 +1397,26 @@ void ESPWebDAVCore::handleDelete(ResourceType resource)
 
     bool retVal;
     if (resource == RESOURCE_FILE)
-        retVal = gfs->remove(uri);
+        retVal = gfs->remove(targetUri);
     else
-        retVal = deleteDir(uri);
+        retVal = deleteDir(targetUri);
 
-    DBG_PRINT("handleDelete: uri='%s' ress=%s ret=%d\n", uri.c_str(), resource == RESOURCE_FILE?"file":"dir", retVal);
+    if (!retVal && !gfs->exists(targetUri))
+        retVal = true;
+
+    DBG_PRINT("handleDelete: uri='%s' ress=%s ret=%d\n", targetUri.c_str(), resource == RESOURCE_FILE?"file":"dir", retVal);
     // for some reason, parent dir can be removed if empty
     // need to leave it there (also to pass compliance tests).
-    int parentIdx = uri.lastIndexOf('/');
+    int parentIdx = targetUri.lastIndexOf('/');
     if (parentIdx >= 0)
     {
-        uri.remove(parentIdx);
-        if (uri.length())
+        String parentUri = targetUri.substring(0, parentIdx);
+        if (parentUri.length())
         {
-            DBG_PRINT("Recreating directory '%s'\n", uri.c_str());
-            if (!mkFullDir(uri))
+            DBG_PRINT("Recreating directory '%s'\n", parentUri.c_str());
+            if (!mkFullDir(parentUri))
             {
-                DBG_PRINT("Error recreating directory '%s'\n", uri.c_str());
+                DBG_PRINT("Error recreating directory '%s'\n", parentUri.c_str());
             }
         }
     }
@@ -1340,7 +1430,7 @@ void ESPWebDAVCore::handleDelete(ResourceType resource)
     }
 
     DBG_PRINT("Delete successful");
-    send("200 OK", NULL, "");
+    send("204 No Content", NULL, "");
 }
 
 
@@ -1576,6 +1666,8 @@ bool ESPWebDAVCore::parseRequest(const String& givenMethod,
     overwrite.clear();
     ifHeader.clear();
     lockTokenHeader.clear();
+    transferChunkedHeader = false;
+    bool expectContinueHeader = false;
 
     while (1)
     {
@@ -1609,8 +1701,21 @@ bool ESPWebDAVCore::parseRequest(const String& givenMethod,
             ifHeader = headerValue;
         else if (headerName.equalsIgnoreCase("Lock-Token"))
             lockTokenHeader = headerValue;
+        else if (headerName.equalsIgnoreCase("Transfer-Encoding"))
+            transferChunkedHeader = headerValue.equalsIgnoreCase("chunked") ||
+                                    headerValue.indexOf("chunked") >= 0 ||
+                                    headerValue.indexOf("Chunked") >= 0;
+        else if (headerName.equalsIgnoreCase("Expect"))
+            expectContinueHeader = headerValue.equalsIgnoreCase("100-continue") ||
+                                   headerValue.indexOf("100-continue") >= 0;
     }
     DBG_PRINT("<<<<<<<<<< RECV");
+
+    if (expectContinueHeader)
+    {
+        static const char continueResponse[] = "HTTP/1.1 100 Continue\r\n\r\n";
+        client->write((const uint8_t *)continueResponse, sizeof(continueResponse) - 1);
+    }
 
     bool ret = true;
     /*ret =*/ handleRequest();

@@ -206,6 +206,7 @@ protected:
     String      overwrite;
     String      ifHeader;
     String      lockTokenHeader;
+    bool        transferChunkedHeader;
     DepthType   depth;
 
     String 		_responseHeaders;

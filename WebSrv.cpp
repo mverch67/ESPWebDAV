@@ -93,7 +93,7 @@ void ESPWebDAV::handleClient()
 
     if (server->hasClient())
     {
-        if (!locClient || !locClient.available())
+        if (locClient.fd() < 0 || !locClient.available())
         {
             // no or sleeping current client
             // take it over
@@ -103,7 +103,7 @@ void ESPWebDAV::handleClient()
         }
     }
 
-    if (!locClient || !locClient.available())
+    if (locClient.fd() < 0 || !locClient.available())
         return;
 
     // extract uri, headers etc
