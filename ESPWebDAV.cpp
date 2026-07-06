@@ -469,22 +469,39 @@ void ESPWebDAVCore::handleRequest()
         DBG_PRINT("Depth: %d", depth);
     }
     File file;
-    if (uri != "/" && !gfs->exists(uri) && (method.equals("GET") || method.equals("HEAD")))
-        uri += ".gz";
-    if (uri == "/" || gfs->exists(uri))
-    {
-        // does uri refer to a file or directory or a null?
-        file = gfs->open(uri, "r");
-        if (file)
+    String requestedUri = uri;
+
+    auto tryOpenResource = [this](const String &path, File &openedFile) {
+        for (int retry = 0; retry < 3; ++retry)
         {
-            resource = file.isDirectory() ? RESOURCE_DIR : RESOURCE_FILE;
-            DBG_PRINT("resource: '%s' is %s", uri.c_str(), resource == RESOURCE_DIR ? "dir" : "file");
+            openedFile = gfs->open(path, "r");
+            if (openedFile)
+                return true;
+            delay(1);
+            yield();
         }
-        else
-            DBG_PRINT("resource: '%s': no file nor dir", uri.c_str());
+        return false;
+    };
+
+    if (requestedUri == "/")
+    {
+        file = gfs->open(requestedUri, "r");
+    }
+    else if (!tryOpenResource(requestedUri, file) && (method.equals("GET") || method.equals("HEAD")))
+    {
+        String gzipUri = requestedUri + ".gz";
+        if (tryOpenResource(gzipUri, file))
+            uri = gzipUri;
+    }
+
+    if (file)
+    {
+        resource = file.isDirectory() ? RESOURCE_DIR : RESOURCE_FILE;
+        DBG_PRINT("resource: '%s' is %s", uri.c_str(), resource == RESOURCE_DIR ? "dir" : "file");
     }
     else
     {
+        uri = requestedUri;
         DBG_PRINT("resource: '%s': not exists", uri.c_str());
     }
 
@@ -982,7 +999,17 @@ void ESPWebDAVCore::handleGet(ResourceType resource, File& file, bool isGet)
                 #warning NOT using Stream::sendSize
     #endif
                 size_t toRead = (size_t)remaining > bufSize ? bufSize : remaining;
-                size_t numRead = file.read((uint8_t*)buf, toRead);
+                size_t numRead = 0;
+                for (int retry = 0; retry < 3 && numRead == 0; ++retry)
+                {
+                    numRead = file.read((uint8_t*)buf, toRead);
+                    if (numRead == 0 && retry < 2)
+                    {
+                        DBG_PRINT("transient zero read with %d bytes remaining, retry=%d", remaining, retry + 1);
+                        delay(1);
+                        yield();
+                    }
+                }
                 DBG_PRINT("read %d bytes from file", (int)numRead);
 
                 if (numRead == 0)
